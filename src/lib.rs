@@ -1,25 +1,31 @@
-use std::sync::Arc;
+pub mod constants;
+pub mod game;
+
+use game::ToGame;
+use std::sync::{
+    Arc,
+    mpsc::{self, Receiver, Sender},
+};
 
 use wgpu::{DeviceDescriptor, ExperimentalFeatures, Features, InstanceDescriptor, Limits};
 use winit::{
     application::ApplicationHandler,
-    dpi::Size,
     event::KeyEvent,
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::PhysicalKey,
-    platform::x11::WindowAttributesExtX11,
-    window::{Cursor, Theme, Window, WindowAttributes, WindowButtons, WindowLevel},
+    window::{Window, WindowAttributes},
 };
 
-pub struct ProgramRunner {}
-
-impl ProgramRunner {
-    pub fn action() {
-        let e = EventLoop::<State>::with_user_event().build().unwrap();
-        let mut p = Program::new();
-        e.run_app(&mut p).unwrap();
-    }
+pub fn let_there_be_light(g: game::GameSimulation) {
+    let e = EventLoop::<State>::with_user_event().build().unwrap();
+    let (s, r) = mpsc::channel::<game::ToGame>();
+    let (s2, r2) = mpsc::channel::<ToMainframe>();
+    let mut p = Program::new(s, r2);
+    std::thread::spawn(move || g.simulate(r, s2));
+    e.run_app(&mut p).unwrap();
 }
+
+pub enum ToMainframe {}
 
 struct State {
     surface: wgpu::Surface<'static>,
@@ -93,8 +99,6 @@ impl State {
     }
 
     pub fn render(&mut self) {
-        self.window.request_redraw();
-
         use wgpu::CurrentSurfaceTexture as T;
         let output = match self.surface.get_current_texture() {
             T::Success(t) => t,
@@ -149,11 +153,17 @@ impl State {
 
 struct Program {
     state: Option<State>,
+    to_game: Sender<ToGame>,
+    from_game: Receiver<ToMainframe>,
 }
 
 impl Program {
-    fn new() -> Program {
-        Self { state: None }
+    fn new(to_game: Sender<ToGame>, from_game: Receiver<ToMainframe>) -> Program {
+        Self {
+            state: None,
+            to_game,
+            from_game,
+        }
     }
 }
 
@@ -182,6 +192,7 @@ impl ApplicationHandler<State> for Program {
         match event {
             W::CloseRequested => {
                 event_loop.exit();
+                let _ = self.to_game.send(ToGame::STOP);
             }
             W::Resized(size) => {
                 state.resize(size.width, size.height);
