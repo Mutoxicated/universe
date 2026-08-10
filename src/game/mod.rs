@@ -29,7 +29,7 @@ pub enum ToGame {
     STOP,
 }
 
-pub trait GameCallbacks: Sync {
+pub trait GameCallbacks: Send + Sync {
     fn start(&mut self, game: &mut GameSimulation);
     fn update(&mut self, game: &mut GameSimulation, dt: f32);
     fn exit(&mut self, game: &mut GameSimulation);
@@ -38,34 +38,23 @@ pub trait GameCallbacks: Sync {
 pub struct GameSimulation {
     camera: Camera,
     physics: Physics,
-    callbacks: &'static dyn GameCallbacks,
 }
 
 impl GameSimulation {
-    /// By creating a game simulation, you are promising that
-    /// the object `callbacks` will only ever be borrowed ONCE
-    /// and that borrow belongs to the game simulation.
-    ///
-    /// See [this](https://doc.rust-lang.org/reference/items/static-items.html#r-items.static.mut.intro)
-    pub fn new(
-        camera: Camera,
-        physics: Physics,
-        callbacks: &'static dyn GameCallbacks,
-    ) -> GameSimulation {
-        Self {
-            camera,
-            physics,
-            callbacks,
-        }
+    pub fn new(camera: Camera, physics: Physics) -> GameSimulation {
+        Self { camera, physics }
     }
 
     pub(crate) fn simulate(
         mut self,
         mainframe: mpsc::Receiver<ToGame>,
         _to_mainframe: mpsc::Sender<ToMainframe>,
+        callbacks: &'static mut dyn GameCallbacks,
     ) {
         let tick = self.physics.tick_rate;
+        let dt: f32 = tick as f32 / 1000.0;
 
+        callbacks.start(&mut self);
         'a: loop {
             thread::sleep(Duration::from_millis(tick));
 
@@ -75,7 +64,11 @@ impl GameSimulation {
                     break 'a;
                 }
             }
+
+            callbacks.update(&mut self, dt);
         }
+
+        callbacks.exit(&mut self);
     }
 
     fn handle_mainframe(&mut self, msg: ToGame) -> i8 {
