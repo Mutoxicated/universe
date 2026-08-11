@@ -1,32 +1,29 @@
 mod camera;
+mod physics;
 pub use camera::{Camera, ViewFrustum};
-use glam::Vec3;
-use std::{sync::mpsc, thread, time::Duration};
+use glam::{Quat, Vec3};
+pub use physics::Physics;
+use std::{ops::Index, sync::mpsc, thread, time::Duration};
+use winit::event_loop::EventLoopProxy;
 
-use crate::ToMainframe;
+use crate::{
+    ToMainframe,
+    render::{FrameObjectData, Mesh, RenderBatch, RenderObject, Vertex},
+};
 
 mod handle_code {
     pub static EXIT: i8 = -1;
+    pub static START: i8 = 1;
     pub static ALL_GOOD: i8 = 0;
 }
 
-pub struct Physics {
-    /// in milliseconds
-    tick_rate: u64,
-    gravity: Vec3,
-}
-
-impl Physics {
-    pub fn new(tick_rate_millis: u64, gravity: Vec3) -> Self {
-        Self {
-            tick_rate: tick_rate_millis,
-            gravity,
-        }
-    }
-}
-
+#[derive(PartialEq, Eq)]
 pub enum ToGame {
     STOP,
+    /// Tells the game thread that the main thread has started
+    /// and initialized the window so that game thread can now start
+    START,
+    UPDATE_CAMERA_ASPECT_RATIO(f32),
 }
 
 pub trait GameCallbacks: Send + Sync {
@@ -48,13 +45,43 @@ impl GameSimulation {
     pub(crate) fn simulate(
         mut self,
         mainframe: mpsc::Receiver<ToGame>,
-        _to_mainframe: mpsc::Sender<ToMainframe>,
-        callbacks: &'static mut dyn GameCallbacks,
+        to_mainframe: EventLoopProxy<ToMainframe>,
+        mut callbacks: Box<dyn GameCallbacks>,
     ) {
+        let ofd = FrameObjectData {
+            position: Vec3::new(0.0, 0.0, 10.0),
+            rotation: Quat::IDENTITY,
+        };
+        let mesh = Mesh {
+            vertices: vec![
+                Vertex {
+                    position: [0.0, 0.5, 0.0],
+                    color: [1.0, 0.0, 0.0, 1.0],
+                },
+                Vertex {
+                    position: [-0.5, -0.5, 0.0],
+                    color: [0.0, 1.0, 0.0, 1.0],
+                },
+                Vertex {
+                    position: [0.5, -0.5, 0.0],
+                    color: [0.0, 0.0, 1.0, 1.0],
+                },
+            ],
+            indices: vec![0, 1, 2],
+            name: "cube".into(),
+        };
+
         let tick = self.physics.tick_rate;
         let dt: f32 = tick as f32 / 1000.0;
 
         callbacks.start(&mut self);
+        let msg = mainframe.recv();
+        if msg.is_err() || msg.unwrap() != ToGame::START {
+            return;
+        }
+
+        let _ = to_mainframe.send_event(ToMainframe::PoolMeshRequest(mesh.clone()));
+
         'a: loop {
             thread::sleep(Duration::from_millis(tick));
 
@@ -66,6 +93,19 @@ impl GameSimulation {
             }
 
             callbacks.update(&mut self, dt);
+
+            let res = to_mainframe.send_event(ToMainframe::RenderRequest(RenderBatch {
+                camera: self.camera.clone(),
+                objects: vec![RenderObject::PooledInstance {
+                    previous_frame: ofd.clone(),
+                    current_frame: ofd.clone(),
+                    mesh_name: mesh.name.clone(),
+                }]
+                .into(),
+            }));
+            if res.is_err() {
+                break;
+            }
         }
 
         callbacks.exit(&mut self);
@@ -75,6 +115,8 @@ impl GameSimulation {
         use ToGame as G;
         match msg {
             G::STOP => return handle_code::EXIT,
+            G::START => return handle_code::ALL_GOOD,
+            G::UPDATE_CAMERA_ASPECT_RATIO(ratio) => self.camera.update_aspect_ratio(ratio),
         };
     }
 }
