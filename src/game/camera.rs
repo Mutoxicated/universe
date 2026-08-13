@@ -1,7 +1,5 @@
 use glam::{Mat4, Quat, Vec3, camera::lh};
 
-use crate::render::OPENGL_TO_WGPU_MAT4;
-
 #[derive(Clone)]
 pub struct ViewFrustum {
     aspect_ratio: f32,
@@ -14,7 +12,7 @@ impl ViewFrustum {
     /// Aspect ratio by default is 16:9
     pub fn new(fov: f32, near: f32, far: f32) -> ViewFrustum {
         Self {
-            aspect_ratio: 9.0 / 16.0,
+            aspect_ratio: 16.0 / 9.0,
             fov,
             near,
             far,
@@ -70,6 +68,6 @@ impl Camera {
     }
 
     pub fn wgpu_view_proj_matrix(&self) -> Mat4 {
-        return OPENGL_TO_WGPU_MAT4 * self.proj_matrix() * self.view_matrix();
+        return self.proj_matrix() * self.view_matrix();
     }
 }

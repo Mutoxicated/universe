@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use glam::Mat4;
 use wgpu::{
     DeviceDescriptor, ExperimentalFeatures, Features, InstanceDescriptor, Limits, util::DeviceExt,
 };
@@ -7,11 +8,7 @@ use winit::window::Window;
 
 use crate::{
     GPUResources,
-    render::{
-        RenderBatch,
-        RenderObject::{PooledInstance, SingleInstance},
-        Vertex,
-    },
+    render::{CameraUniform, FrameObjectData, RenderBatch, Vertex},
 };
 
 pub struct State {
@@ -22,8 +19,10 @@ pub struct State {
     window: Arc<Window>,
     render_pipeline: wgpu::RenderPipeline,
     pooled_gpu_resources: Vec<(Arc<str>, GPUResources)>,
-    camera_uniform: render::CameraUniform,
+    camera_uniform: CameraUniform,
+    rot_trans_matrix: Mat4,
     camera_buffer: wgpu::Buffer,
+    rot_trans_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
 }
 
@@ -75,34 +74,58 @@ impl State {
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
-        let mut camera_uniform = CameraUniform::new();
+        let camera_uniform = CameraUniform::new();
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let rot_trans_matrix = Mat4::default();
+        let rot_trans_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Rot Trans Buffer"),
+            contents: bytemuck::cast_slice(&[rot_trans_matrix.to_cols_array_2d()]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
                 label: Some("Camera Bind Group Layout"),
             });
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: rot_trans_buffer.as_entire_binding(),
+                },
+            ],
             label: Some("Camera Bind Group"),
         });
 
@@ -163,7 +186,9 @@ impl State {
             render_pipeline,
             pooled_gpu_resources: vec![],
             camera_uniform,
+            rot_trans_matrix,
             camera_buffer,
+            rot_trans_buffer,
             camera_bind_group,
         }
     }
@@ -225,34 +250,30 @@ impl State {
             multiview_mask: None,
         });
 
-        self.camera_uniform.update(batch.camera);
+        self.camera_uniform.update(&batch.camera);
+        self.queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-        for o in batch.objects.iter() {
-            match o {
-                PooledInstance {
-                    previous_frame,
-                    current_frame,
-                    mesh_name,
-                } => {
-                    let gpur = self.find_gpu_resources(mesh_name.clone());
-                    self.draw_mesh_from_gpu_resources(&mut render_pass, gpur);
-                }
-                SingleInstance {
-                    previous_frame: _,
-                    current_frame: _,
-                    mesh: _,
-                } => {}
-            }
+        for ipi in batch.ipi.iter() {
+            let obj = &ipi.obj;
+            self.update_interpolated_object_matrix(&obj.previous_frame, &obj.current_frame, ival);
+            let gpur = self.find_gpu_resources(ipi.mesh_name.clone());
+            self.draw_mesh_from_gpu_resources(&mut render_pass, gpur);
+        }
+        for isi in batch.isi.iter() {
+            let obj = &isi.obj;
+            self.update_interpolated_object_matrix(&obj.previous_frame, &obj.current_frame, ival);
+            let gpur = self.create_gpu_resources_from_mesh(&isi.mesh);
+            self.draw_mesh_from_gpu_resources(&mut render_pass, &gpur);
         }
         drop(render_pass);
         self.window.pre_present_notify();
         self.queue.submit(std::iter::once(encoder.finish()));
         self.queue.present(output);
-    }
-
-    pub fn request_redraw(&self) {
-        self.window.request_redraw();
     }
 
     fn find_gpu_resources(&self, mesh_name: Arc<str>) -> &GPUResources {
@@ -281,6 +302,24 @@ impl State {
                 render_pass.draw(0..*length, 0..1);
             }
         }
+    }
+
+    fn update_interpolated_object_matrix(
+        &mut self,
+        previous_frame: &FrameObjectData,
+        frame: &FrameObjectData,
+        ival: f32,
+    ) {
+        self.rot_trans_matrix = Mat4::from_scale_rotation_translation(
+            previous_frame.scale.lerp(frame.scale, ival),
+            previous_frame.rotation.lerp(frame.rotation, ival),
+            previous_frame.position.lerp(frame.position, ival),
+        );
+        self.queue.write_buffer(
+            &self.rot_trans_buffer,
+            0,
+            bytemuck::cast_slice(&[self.rot_trans_matrix.to_cols_array_2d()]),
+        );
     }
 
     pub fn pool_gpu_resources_from_mesh(&mut self, mesh: crate::render::Mesh) {

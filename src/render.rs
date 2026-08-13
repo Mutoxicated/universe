@@ -1,21 +1,7 @@
 use std::sync::Arc;
 
 use crate::game::{self, Camera};
-use glam::{Mat4, Quat, Vec3, Vec4};
-
-// pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::from_cols(
-//     Vec::new(1.0, 0.0, 0.0, 0.0),
-//     cgmath::Vector4::new(0.0, 1.0, 0.0, 0.0),
-//     cgmath::Vector4::new(0.0, 0.0, 0.5, 0.0),
-//     cgmath::Vector4::new(0.0, 0.0, 0.5, 1.0),
-// );
-
-pub const OPENGL_TO_WGPU_MAT4: Mat4 = Mat4::from_cols(
-    Vec4::new(1.0, 0.0, 0.0, 0.0),
-    Vec4::new(0.0, 1.0, 0.0, 0.0),
-    Vec4::new(0.0, 0.0, 0.5, 0.0),
-    Vec4::new(0.0, 0.0, 0.5, 1.0),
-);
+use glam::{Mat4, Quat, Vec3};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,18 +12,16 @@ pub struct CameraUniform {
 impl CameraUniform {
     pub fn new() -> Self {
         Self {
-            view_proj: Mat4::default().into(),
-        }
-    }
-
-    pub fn from_camera(camera: &Camera) -> Self {
-        Self {
-            view_proj: camera.wgpu_view_proj_matrix().into(),
+            view_proj: Mat4::default().to_cols_array_2d(),
         }
     }
 
     pub fn update(&mut self, camera: &Camera) {
-        self.view_proj = camera.wgpu_view_proj_matrix().into();
+        self.view_proj = camera.wgpu_view_proj_matrix().to_cols_array_2d();
+    }
+
+    pub fn inner(&self) -> &[[f32; 4]; 4] {
+        return &self.view_proj;
     }
 }
 
@@ -80,32 +64,37 @@ pub struct Mesh {
 #[derive(Copy, Clone)]
 pub struct FrameObjectData {
     pub position: Vec3,
+    pub scale: Vec3,
     pub rotation: Quat,
 }
 
-pub enum RenderObject {
-    SingleInstance {
-        previous_frame: FrameObjectData,
-        current_frame: FrameObjectData,
-        mesh: Mesh,
-    },
-    PooledInstance {
-        previous_frame: FrameObjectData,
-        current_frame: FrameObjectData,
-        mesh_name: Arc<str>,
-    },
+pub struct RenderObject {
+    pub previous_frame: FrameObjectData,
+    pub current_frame: FrameObjectData,
+}
+
+pub struct ISingleInstance {
+    pub obj: RenderObject,
+    pub mesh: Mesh,
+}
+
+pub struct IPooledInstance {
+    pub obj: RenderObject,
+    pub mesh_name: Arc<str>,
 }
 
 pub struct RenderBatch {
     pub camera: game::Camera,
-    pub objects: Arc<[RenderObject]>,
+    pub isi: Arc<[ISingleInstance]>,
+    pub ipi: Arc<[IPooledInstance]>,
 }
 
 impl RenderBatch {
     pub fn empty() -> Self {
         Self {
             camera: Camera::DEFAULT,
-            objects: vec![].into(),
+            isi: vec![].into(),
+            ipi: vec![].into(),
         }
     }
 }

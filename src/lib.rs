@@ -71,8 +71,8 @@ impl ApplicationHandler<ToMainframe> for Program {
             .unwrap();
         let size = window.inner_size();
         self.state = Some(State::new(window));
-        let _ = self.to_game.send(ToGame::START);
-        let _ = self.to_game.send(ToGame::UPDATE_CAMERA_ASPECT_RATIO(
+        let _ = self.to_game.send(ToGame::Start);
+        let _ = self.to_game.send(ToGame::UpdateCameraAspectRatio(
             size.width as f32 / size.height as f32,
         ));
     }
@@ -94,11 +94,11 @@ impl ApplicationHandler<ToMainframe> for Program {
         match event {
             W::CloseRequested => {
                 event_loop.exit();
-                let _ = self.to_game.send(ToGame::STOP);
+                let _ = self.to_game.send(ToGame::Stop);
             }
             W::Resized(size) => {
                 state.resize(size.width, size.height);
-                self.to_game.send(ToGame::UPDATE_CAMERA_ASPECT_RATIO(
+                let _ = self.to_game.send(ToGame::UpdateCameraAspectRatio(
                     size.width as f32 / size.height as f32,
                 ));
             }
