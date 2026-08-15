@@ -1,4 +1,5 @@
 pub mod game;
+mod mansel;
 mod render;
 mod state;
 pub mod statics;
@@ -27,7 +28,10 @@ pub fn let_there_be_light(g: game::GameSimulation, callbacks: Box<dyn GameCallba
     let proxy = e.create_proxy();
 
     let mut p = Program::new(s);
-    std::thread::spawn(move || g.simulate(r, proxy, callbacks));
+    std::thread::Builder::new()
+        .name(String::from("game thread"))
+        .spawn(move || g.simulate(r, proxy, callbacks))
+        .unwrap();
     e.run_app(&mut p).unwrap();
 }
 
@@ -127,9 +131,9 @@ impl ApplicationHandler<ToMainframe> for Program {
             M::RenderRequest(b) => {
                 self.render_batch = b;
             }
-            M::PoolMeshRequest(m) => {
+            M::PoolMeshRequest(mesh) => {
                 let state = self.state.as_mut().unwrap();
-                state.pool_gpu_resources_from_mesh(m);
+                state.pool_gpu_resources_from_mesh(mesh);
             }
         }
     }

@@ -6,9 +6,14 @@ use crate::game::GameSimulation;
 
 pub struct Object {
     pub position: Vec3,
-    pub rotation: Quat,
+    pub scale: Vec3,
     /// if it's empty, then that signifies to the engine that it doesn't have a mesh
     pub mesh_path: Arc<str>,
+    pub rotation: Quat,
+}
+
+pub struct ObjectInfo {
+    pub is_alive: bool,
 }
 
 pub trait Custom: Send + Sync {

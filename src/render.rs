@@ -19,10 +19,6 @@ impl CameraUniform {
     pub fn update(&mut self, camera: &Camera) {
         self.view_proj = camera.wgpu_view_proj_matrix().to_cols_array_2d();
     }
-
-    pub fn inner(&self) -> &[[f32; 4]; 4] {
-        return &self.view_proj;
-    }
 }
 
 #[repr(C)]
@@ -60,6 +56,36 @@ pub struct Mesh {
     pub name: Arc<str>,
 }
 
+impl Mesh {
+    pub fn empty() -> Self {
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            name: "".into(),
+        }
+    }
+}
+
+pub fn load_gltf_into_mesh(mesh_path: Arc<str>) -> Result<Mesh, Arc<str>> {
+    let scenes = easy_gltf::load(mesh_path.to_string());
+    if let Err(x) = scenes {
+        return Err(format!("Failed to load mesh: {x}").into());
+    }
+    let scenes = scenes.unwrap();
+    if scenes.is_empty() {
+        return Err("There was no mesh to load bruh!".into());
+    }
+
+    let model = &scenes[0].models[0];
+    let vertices = Vec::<Vertex>::new();
+    let indices = Vec::<u16>::new();
+
+    let model_vertices = model.vertices();
+    let material = model.material();
+
+    Ok(Mesh::empty())
+}
+
 /// Renderable object data for ONE frame
 #[derive(Copy, Clone)]
 pub struct FrameObjectData {
@@ -80,7 +106,7 @@ pub struct ISingleInstance {
 
 pub struct IPooledInstance {
     pub obj: RenderObject,
-    pub mesh_name: Arc<str>,
+    pub mesh_path: Arc<str>,
 }
 
 pub struct RenderBatch {

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use glam::Mat4;
 use wgpu::{
@@ -8,7 +8,7 @@ use winit::window::Window;
 
 use crate::{
     GPUResources,
-    render::{CameraUniform, FrameObjectData, RenderBatch, Vertex},
+    render::{CameraUniform, FrameObjectData, Mesh, RenderBatch, Vertex},
 };
 
 pub struct State {
@@ -18,7 +18,9 @@ pub struct State {
     config: wgpu::SurfaceConfiguration,
     window: Arc<Window>,
     render_pipeline: wgpu::RenderPipeline,
-    pooled_gpu_resources: Vec<(Arc<str>, GPUResources)>,
+
+    pooled_gpu_resources: HashMap<Arc<str>, GPUResources>,
+
     camera_uniform: CameraUniform,
     rot_trans_matrix: Mat4,
     camera_buffer: wgpu::Buffer,
@@ -184,7 +186,7 @@ impl State {
             config,
             window,
             render_pipeline,
-            pooled_gpu_resources: vec![],
+            pooled_gpu_resources: HashMap::new(),
             camera_uniform,
             rot_trans_matrix,
             camera_buffer,
@@ -261,7 +263,7 @@ impl State {
         for ipi in batch.ipi.iter() {
             let obj = &ipi.obj;
             self.update_interpolated_object_matrix(&obj.previous_frame, &obj.current_frame, ival);
-            let gpur = self.find_gpu_resources(ipi.mesh_name.clone());
+            let gpur = self.find_gpu_resources(ipi.mesh_path.clone());
             self.draw_mesh_from_gpu_resources(&mut render_pass, gpur);
         }
         for isi in batch.isi.iter() {
@@ -277,12 +279,7 @@ impl State {
     }
 
     fn find_gpu_resources(&self, mesh_name: Arc<str>) -> &GPUResources {
-        &self
-            .pooled_gpu_resources
-            .iter()
-            .find(|a| a.0 == mesh_name)
-            .unwrap()
-            .1
+        self.pooled_gpu_resources.get(&mesh_name).unwrap()
     }
 
     fn draw_mesh_from_gpu_resources(
@@ -322,9 +319,9 @@ impl State {
         );
     }
 
-    pub fn pool_gpu_resources_from_mesh(&mut self, mesh: crate::render::Mesh) {
+    pub fn pool_gpu_resources_from_mesh(&mut self, mesh: Mesh) {
         let gpur = self.create_gpu_resources_from_mesh(&mesh);
-        self.pooled_gpu_resources.push((mesh.name.clone(), gpur));
+        self.pooled_gpu_resources.insert(mesh.name.clone(), gpur);
     }
 
     pub fn create_gpu_resources_from_mesh(&self, mesh: &crate::render::Mesh) -> GPUResources {
